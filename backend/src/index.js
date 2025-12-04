@@ -8,7 +8,9 @@ const util = require("util");
 const libre = require("libreoffice-convert");
 const sharp = require("sharp");
 const qrcode = require("qrcode");
-const ffmpeg = require("fluent-ffmpeg");
+const { spawn } = require("child_process");
+const ffmpegPath = require("ffmpeg-static");
+
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -197,6 +199,7 @@ app.post("/api/audio/convert", upload.single("file"), async (req, res) => {
 
   const inputPath = req.file.path;
   const { targetFormat = "mp3", bitrate = "192k" } = req.body || {};
+
   const allowedInputTypes = [
     "audio/flac",
     "audio/x-flac",
@@ -218,27 +221,51 @@ app.post("/api/audio/convert", upload.single("file"), async (req, res) => {
 
   if (!allowedInputTypes.includes(req.file.mimetype)) {
     await safeUnlink(inputPath);
-    return res.status(400).json({ error: "Unsupported input audio format" });
+    return res
+      .status(400)
+      .json({ error: "Unsupported input audio format" });
   }
 
   const outputPath = path.join(uploadDir, `${uuidv4()}.${safeFormat}`);
 
+  // ffmpeg arguments
+  const commonArgs = ["-y", "-i", inputPath, "-vn"]; // -vn = no video
+  let formatArgs = [];
+
+  if (safeFormat === "mp3") {
+    formatArgs = ["-codec:a", "libmp3lame", "-b:a", bitrate];
+  } else if (safeFormat === "aac") {
+    formatArgs = ["-codec:a", "aac", "-b:a", bitrate];
+  } else if (safeFormat === "wav") {
+    formatArgs = ["-codec:a", "pcm_s16le"]; // PCM for WAV
+  } else if (safeFormat === "ogg") {
+    formatArgs = ["-codec:a", "libvorbis", "-b:a", bitrate];
+  }
+
+  const ffArgs = [...commonArgs, ...formatArgs, outputPath];
+
   try {
-    const convertedBuffer = await new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
-        .audioBitrate(bitrate)
-        .toFormat(safeFormat)
-        .on("error", reject)
-        .on("end", async () => {
-          try {
-            const buf = await readFileAsync(outputPath);
-            resolve(buf);
-          } catch (e) {
-            reject(e);
-          }
-        })
-        .save(outputPath);
+    // Run ffmpeg via child_process
+    await new Promise((resolve, reject) => {
+      const proc = spawn(ffmpegPath, ffArgs);
+
+      let stderr = "";
+      proc.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on("error", (err) => reject(err));
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`ffmpeg exited with code ${code}: ${stderr}`));
+        }
+      });
     });
+
+    const convertedBuffer = await readFileAsync(outputPath);
 
     let mimeType = "audio/mpeg";
     if (safeFormat === "aac") mimeType = "audio/aac";
@@ -258,12 +285,16 @@ app.post("/api/audio/convert", upload.single("file"), async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Audio conversion failed", details: err.message });
+    res.status(500).json({
+      error: "Audio conversion failed",
+      details: err.message,
+    });
   } finally {
     await safeUnlink(inputPath);
-    await safeUnlink(outputPath);
+    await safeUnlink(outputPath).catch(() => {});
   }
 });
+
 
 // 2. BMI Calculator
 app.post("/api/calc/bmi", (req, res) => {
