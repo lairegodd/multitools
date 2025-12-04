@@ -5,7 +5,7 @@ Small multitools web app:
 - DOCX ↔ PDF (server-side using LibreOffice)
 - Image compression (sharp)
 - URL → QR code (qrcode)
-- Audio conversion to MP3/AAC/WAV/OGG (ffmpeg + fluent-ffmpeg)
+- Audio conversion to MP3/AAC/WAV/OGG (ffmpeg + ffmpeg-static)
 - BMI calculator
 
 ## 1. Requirements
